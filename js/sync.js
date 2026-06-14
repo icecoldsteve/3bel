@@ -1,40 +1,40 @@
-/* 3BEL — Sync tussen toestellen (Upstash Redis REST, offline-first)
-   - IndexedDB blijft de bron van waarheid; de cloud is enkel de spiegel.
-   - Last-write-wins op basis van een revisie-timestamp. */
+/* 3BEL — Sync tussen toestellen via server-side proxy (/api/sync).
+   Offline-first: IndexedDB blijft de bron van waarheid, de cloud is de spiegel.
+   Geen tokens in de browser — die staan server-side op Vercel. Standaard automatisch aan. */
 const SYNC = (() => {
-  const CFG_KEY  = '3bel-sync';      // { url, token, code }
-  const REV_KEY  = '3bel-rev';       // ISO timestamp laatste lokale wijziging
-  const META_KEY = '3bel-sync-meta'; // { lastAt, status }
+  const ENDPOINT = '/api/sync';
+  const CODE_KEY = '3bel-sync-code';   // gedeelde bucket-code (zelfde op alle toestellen)
+  const ON_KEY   = '3bel-sync-on';     // '0' = uit, anders aan
+  const REV_KEY  = '3bel-rev';
+  const META_KEY = '3bel-sync-meta';
   let pushTimer = null;
 
-  function getConfig() { try { return JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch { return null; } }
-  function setConfig(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
-  function clearConfig() { localStorage.removeItem(CFG_KEY); }
-  function isConfigured() { const c = getConfig(); return !!(c && c.url && c.token); }
+  function getCode() { return localStorage.getItem(CODE_KEY) || 'andry'; }
+  function setCode(c) { localStorage.setItem(CODE_KEY, (c || 'andry')); }
+  function isOn() { return localStorage.getItem(ON_KEY) !== '0'; }   // standaard AAN
+  function setOn(v) { localStorage.setItem(ON_KEY, v ? '1' : '0'); }
+
+  function getConfig() { return { code: getCode(), on: isOn() }; }
+  function setConfig(c) { if (c && c.code != null) setCode(c.code); if (c && c.on != null) setOn(c.on); }
+  function clearConfig() { setOn(false); }
+  function isConfigured() { return isOn(); }
 
   function getRev() { return localStorage.getItem(REV_KEY) || ''; }
   function setRev(r) { localStorage.setItem(REV_KEY, r); }
   function getMeta() { try { return JSON.parse(localStorage.getItem(META_KEY) || 'null'); } catch { return null; } }
   function setMeta(m) { localStorage.setItem(META_KEY, JSON.stringify(m)); }
 
-  function keyName() { const c = getConfig(); return `3bel:${(c && c.code) || 'andry'}`; }
-  function base() { return (getConfig().url || '').replace(/\/+$/, ''); }
-  function headers() { return { Authorization: `Bearer ${getConfig().token}` }; }
+  function ep() { return `${ENDPOINT}?code=${encodeURIComponent(getCode())}`; }
 
-  // ── Upstash REST ──
   async function remoteGet() {
-    const res = await fetch(`${base()}/get/${encodeURIComponent(keyName())}`, { headers: headers() });
-    if (!res.ok) throw new Error('GET ' + res.status);
-    const j = await res.json();
-    if (j.result == null) return null;
-    try { return JSON.parse(j.result); } catch { return null; }
+    const r = await fetch(ep(), { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) throw new Error('GET ' + r.status);
+    return r.json();                       // null of { rev, data }
   }
-  async function remoteSet(payloadObj) {
-    const res = await fetch(`${base()}/set/${encodeURIComponent(keyName())}`, {
-      method: 'POST', headers: headers(), body: JSON.stringify(payloadObj),
-    });
-    if (!res.ok) throw new Error('SET ' + res.status);
-    return res.json();
+  async function remoteSet(payload) {
+    const r = await fetch(ep(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.ok) throw new Error('SET ' + r.status);
+    return r.json();
   }
 
   async function buildPayload() {
@@ -45,26 +45,20 @@ const SYNC = (() => {
   }
 
   async function push() {
-    if (!isConfigured()) return 'off';
-    const payload = await buildPayload();
-    await remoteSet(payload);
+    if (!isOn()) return 'off';
+    await remoteSet(await buildPayload());
     setMeta({ lastAt: new Date().toISOString(), status: 'pushed' });
     return 'pushed';
   }
+  async function pull() { if (!isOn()) return null; return remoteGet(); }
 
-  async function pull() {
-    if (!isConfigured()) return null;
-    return remoteGet();
-  }
-
-  // Hoofd-sync: vergelijkt revisies en kiest pull of push.
   async function sync() {
-    if (!isConfigured()) return 'off';
+    if (!isOn()) return 'off';
     try {
       const remote = await remoteGet();
       const localRev = getRev();
       if (remote && remote.rev && remote.rev > localRev) {
-        await DB.importAll(remote.data, { replace: true }); // interne puts -> markeert niet "dirty"
+        await DB.importAll(remote.data, { replace: true });    // interne puts -> markeert niet "dirty"
         setRev(remote.rev);
         setMeta({ lastAt: new Date().toISOString(), status: 'pulled' });
         window.dispatchEvent(new CustomEvent('3bel:synced', { detail: { action: 'pulled' } }));
@@ -81,10 +75,9 @@ const SYNC = (() => {
     }
   }
 
-  // Eerste koppeling: cloud heeft data -> dit toestel neemt cloud over.
-  // Cloud leeg -> dit toestel zaait de cloud.
+  // Eerste koppeling van een toestel: cloud heeft data -> overnemen; cloud leeg -> zaaien.
   async function connect() {
-    if (!isConfigured()) return 'off';
+    setOn(true);
     const remote = await remoteGet();
     if (remote && remote.data && (remote.data.customers?.length || remote.data.appointments?.length)) {
       await DB.importAll(remote.data, { replace: true });
@@ -99,9 +92,8 @@ const SYNC = (() => {
     }
   }
 
-  // ── Dirty-tracking: wrap DB-schrijfmethodes zodat elke wijziging een push plant ──
   function _markDirty() {
-    if (!isConfigured()) return;
+    if (!isOn()) return;
     setRev(new Date().toISOString());
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => { push().catch(() => {}); }, 1500);
@@ -119,9 +111,8 @@ const SYNC = (() => {
   }
   _wrap();
 
-  // Sync bij terugkeer naar de app en bij online komen.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && isConfigured()) sync().catch(() => {}); });
-  window.addEventListener('online', () => { if (isConfigured()) sync().catch(() => {}); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && isOn()) sync().catch(() => {}); });
+  window.addEventListener('online', () => { if (isOn()) sync().catch(() => {}); });
 
-  return { isConfigured, getConfig, setConfig, clearConfig, getRev, getMeta, sync, connect, push, pull, touch };
+  return { isConfigured, getConfig, setConfig, clearConfig, getCode, setCode, getRev, getMeta, sync, connect, push, pull, touch };
 })();

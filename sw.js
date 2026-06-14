@@ -1,5 +1,5 @@
 /* 3BEL — Service Worker */
-const CACHE = '3bel-v2';
+const CACHE = '3bel-v3';
 const ASSETS = [
   '/',
   '/index.html',

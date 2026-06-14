@@ -530,23 +530,23 @@
     const root = $('#view-instellingen');
     const cfg = SYNC.getConfig() || {};
     const meta = SYNC.getMeta();
-    const connected = SYNC.isConfigured();
-    const syncStatus = connected
-      ? `Verbonden${meta?.lastAt ? ` · laatste sync ${new Date(meta.lastAt).toLocaleString('nl-BE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}` : ''}`
-      : 'Niet verbonden — data staat enkel op dit toestel.';
+    const on = SYNC.isConfigured();
+    const lastTxt = meta?.lastAt ? new Date(meta.lastAt).toLocaleString('nl-BE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : null;
+    const syncStatus = on
+      ? `Automatisch aan${lastTxt ? ` · laatste sync ${lastTxt}` : ' · nog niet gesynct'}`
+      : 'Uitgeschakeld — data staat enkel op dit toestel.';
     const syncCard = `
       <div class="card">
         <h3 style="margin:0 0 6px">Synchronisatie tussen toestellen</h3>
         <p class="muted" style="font-size:.85rem;margin-top:0">${esc(syncStatus)}</p>
-        <div class="field"><label>Upstash REST URL</label><input id="sync-url" type="url" placeholder="https://xxx.upstash.io" value="${esc(cfg.url||'')}"></div>
-        <div class="field"><label>Upstash REST token</label><input id="sync-token" type="password" placeholder="AX…" value="${esc(cfg.token||'')}"></div>
         <div class="field"><label>Sync-code (zelfde op gsm én tablet)</label><input id="sync-code" value="${esc(cfg.code||'andry')}"></div>
         <div class="btn-row" style="margin-bottom:10px">
-          <button class="btn btn-sm" data-action="sync-save" style="flex:1">Verbinden</button>
+          <button class="btn btn-sm" data-action="sync-save" style="flex:1">Opslaan &amp; sync</button>
           <button class="btn btn-soft btn-sm" data-action="sync-now" style="flex:1">Sync nu</button>
         </div>
-        ${connected ? `<button class="btn btn-ghost btn-sm" data-action="sync-disconnect">Loskoppelen</button>` : ''}
-        <p class="muted" style="font-size:.78rem">Gratis bucket via console.upstash.com → maak een Redis-database → kopieer <b>UPSTASH_REDIS_REST_URL</b> en <b>…REST_TOKEN</b>. Vul op beide toestellen dezelfde gegevens + sync-code in.</p>
+        ${on ? `<button class="btn btn-ghost btn-sm" data-action="sync-disconnect">Sync uitzetten</button>`
+             : `<button class="btn btn-ghost btn-sm" data-action="sync-enable">Sync aanzetten</button>`}
+        <p class="muted" style="font-size:.78rem">Werkt vanzelf op elk toestel — gebruik gewoon dezelfde sync-code op gsm én tablet. Data wordt veilig via de server bewaard; er staat geen sleutel in de app.</p>
       </div>`;
     root.innerHTML = `
       <div class="card">
@@ -599,20 +599,17 @@
     r.readAsText(file);
   }
   async function syncSave() {
-    const url = ($('#sync-url').value || '').trim().replace(/\/+$/, '');
-    const token = ($('#sync-token').value || '').trim();
     const code = ($('#sync-code').value || '').trim() || 'andry';
-    if (!url || !token) { toast('URL en token zijn verplicht', 'err'); return; }
-    SYNC.setConfig({ url, token, code });
-    toast('Verbinden…');
+    SYNC.setConfig({ code, on: true });
+    toast('Synchroniseren…');
     try {
       const r = await SYNC.connect();
-      toast(r === 'pulled' ? 'Cloud-data opgehaald ✓' : 'Cloud aangemaakt ✓', 'ok');
+      toast(r === 'pulled' ? 'Cloud-data opgehaald ✓' : 'Cloud bijgewerkt ✓', 'ok');
       render();
-    } catch { toast('Verbinden mislukt — controleer URL/token', 'err'); }
+    } catch { toast('Sync mislukt — controleer je verbinding', 'err'); }
   }
   async function syncNow() {
-    if (!SYNC.isConfigured()) { toast('Verbind eerst met een bucket', 'err'); return; }
+    if (!SYNC.isConfigured()) { toast('Zet sync eerst aan', 'err'); return; }
     toast('Synchroniseren…');
     try {
       const r = await SYNC.sync();
@@ -620,7 +617,12 @@
       render();
     } catch { toast('Sync mislukt — controleer verbinding', 'err'); }
   }
-  function syncDisconnect() { SYNC.clearConfig(); toast('Losgekoppeld'); render(); }
+  async function syncEnable() {
+    SYNC.setConfig({ on: true }); toast('Sync aangezet');
+    try { await SYNC.connect(); } catch {}
+    render();
+  }
+  function syncDisconnect() { SYNC.clearConfig(); toast('Sync uitgezet'); render(); }
   async function wipeAll() {
     openModal(`<h3>Alles wissen?</h3><p class="modal-sub">Alle klanten en afspraken worden definitief verwijderd.</p>
       <div class="modal-actions"><button class="btn btn-danger" data-action="wipe-confirm">Ja, wis alles</button><button class="btn btn-ghost" data-action="close-modal">Annuleren</button></div>`);
@@ -675,6 +677,7 @@
       'save-settings': () => saveSettingsFromForm(),
       'sync-save': () => syncSave(),
       'sync-now': () => syncNow(),
+      'sync-enable': () => syncEnable(),
       'sync-disconnect': () => syncDisconnect(),
       'backup-export': () => backupExport(),
       'seed-demo': () => seedDemo(),
