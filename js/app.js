@@ -569,6 +569,11 @@
         <label class="btn btn-soft btn-sm" style="display:flex"><input id="backup-file" type="file" accept="application/json" hidden> ⬆ Importeer back-up</label>
       </div>
       <div class="card">
+        <h3 style="margin:0 0 8px">Beveiliging</h3>
+        <p class="muted" style="font-size:.85rem;margin-top:0">De app vraagt bij elke start een pincode.</p>
+        <button class="btn btn-soft btn-sm" data-action="lock-now">🔒 Nu vergrendelen</button>
+      </div>
+      <div class="card">
         <h3 style="margin:0 0 8px">Demo</h3>
         <button class="btn btn-ghost btn-sm" data-action="seed-demo" style="margin-bottom:10px">Voeg demo-klanten toe</button>
         <button class="btn btn-danger btn-sm" data-action="wipe">Alle data wissen</button>
@@ -681,6 +686,7 @@
       'sync-disconnect': () => syncDisconnect(),
       'backup-export': () => backupExport(),
       'seed-demo': () => seedDemo(),
+      'lock-now': () => LOCK.lock(),
       'wipe': () => wipeAll(),
       'wipe-confirm': async () => { await DB.wipe(); closeModal(); toast('Alle data gewist'); render(); },
       'close-modal': () => closeModal(),
@@ -690,6 +696,7 @@
 
   // ─────────────────────────── Boot ───────────────────────────
   async function boot() {
+    await LOCK.ensureUnlocked();
     await DB.open();
     setView('kalender');
     if ('serviceWorker' in navigator) {

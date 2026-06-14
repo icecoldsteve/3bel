@@ -1,5 +1,5 @@
 /* 3BEL — Service Worker */
-const CACHE = '3bel-v3';
+const CACHE = '3bel-v4';
 const ASSETS = [
   '/',
   '/index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   '/js/geo.js',
   '/js/weather.js',
   '/js/sync.js',
+  '/js/lock.js',
   '/js/app.js',
   '/manifest.json',
   '/icons/icon-192.png',
