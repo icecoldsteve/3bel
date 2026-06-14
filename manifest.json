@@ -1,0 +1,19 @@
+{
+  "name": "3BEL — Ramenwasplanning",
+  "short_name": "3BEL",
+  "description": "Planning, klantenbeheer, WhatsApp-berichten en dagafsluiting voor ramenwasbedrijf 3BEL.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0B4DA8",
+  "theme_color": "#1E6FD9",
+  "lang": "nl",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
