@@ -34,6 +34,23 @@
   function nextDue(c) { return c.laatsteWasbeurt ? addDays(parseISO(c.laatsteWasbeurt), freqDays(c)) : new Date(0); }
   function isDue(c, ref = new Date()) { return nextDue(c) <= ref; }
 
+  function customerAddress(c) {
+    const street = [c.straat, c.huisnummer].filter(Boolean).join(' ');
+    const city = [c.postcode, c.gemeente].filter(Boolean).join(' ');
+    return [street, city].filter(Boolean).join(', ');
+  }
+  // Bouwt een Google Maps route-URL (auto) langs de stops in volgorde, startend vanuit De Panne.
+  function mapsRouteUrl(stops) {
+    const addrs = stops.map(customerAddress).filter(Boolean).map(a => `${a}, België`);
+    if (!addrs.length) return null;
+    const origin = `${GEO.BASE.lat},${GEO.BASE.lng}`;
+    const destination = encodeURIComponent(addrs[addrs.length - 1]);
+    const wp = addrs.slice(0, -1).map(encodeURIComponent).join('%7C');
+    let url = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}`;
+    if (wp) url += `&waypoints=${wp}`;
+    return url;
+  }
+
   // ─────────────────────────── Settings ───────────────────────────
   const SET_KEY = '3bel-settings';
   const DEFAULTS = { workStart: '17:00', workEnd: '22:00', duration: 30, planDays: [0,1,2,3,4] }; // ma-vr
@@ -98,6 +115,7 @@
 
   async function renderMonth() {
     const c = $('#cal-content');
+    await WEATHER.ensure();
     const d = state.calDate;
     const year = d.getFullYear(), month = d.getMonth();
     const first = new Date(year, month, 1);
@@ -116,9 +134,11 @@
       const today = iso === todayISO();
       const list = byDate[iso] || [];
       const dots = list.slice(0,4).map(a => `<span class="dot s-${a.status}"></span>`).join('');
+      const wx = (!other && iso >= todayISO()) ? WEATHER.badge(iso) : null;
       cells += `<div class="cal-cell ${other?'is-other':''} ${today?'is-today':''}" data-action="open-day" data-date="${iso}">
         <span class="d">${cd.getDate()}</span>
         ${list.length ? `<span class="count">${list.length}</span>` : ''}
+        ${wx ? `<span class="wx" title="${wx.pop}% kans op neerslag">${wx.emoji}</span>` : ''}
         <span class="dots">${dots}</span>
       </div>`;
     }
@@ -135,10 +155,14 @@
   async function renderDay() {
     const c = $('#cal-content');
     const s = getSettings();
+    await WEATHER.ensure();
     const date = parseISO(state.selectedDate);
     const appts = (await DB.appointmentsByDate(state.selectedDate)).sort((a,b)=>a.startTijd.localeCompare(b.startTijd));
     const custs = await DB.getAll('customers');
     const cmap = Object.fromEntries(custs.map(c => [c.id, c]));
+    const stops = appts.map(a => cmap[a.customerId]).filter(Boolean);
+    const routeUrl = stops.length ? mapsRouteUrl(stops) : null;
+    const wl = WEATHER.label(state.selectedDate);
 
     const start = timeToMin(s.workStart), end = timeToMin(s.workEnd), step = s.duration;
     let rows = '';
@@ -169,6 +193,10 @@
         <div class="cal-title" style="text-transform:capitalize">${fmtDayDate(date)}</div>
         <button class="btn btn-ghost icon-btn" data-action="day-next" aria-label="Volgende dag">›</button>
       </div>
+      ${wl ? `<div class="wx-banner ${wl.rainy?'is-rainy':''}">${wl.rainy?'☔':'🌤️'} ${wl.pop}% kans op neerslag${wl.tmax?` · ${wl.tmax}`:''}${wl.rainy?' — misschien beter verschuiven':''}</div>` : ''}
+      ${routeUrl ? `<a class="btn btn-soft route-btn" href="${routeUrl}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+        Route openen in Maps (${stops.length} ${stops.length===1?'stop':'stops'})</a>` : ''}
       <div class="day-banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Hoofdberoep 07:00–17:00 — geblokkeerd</div>
       <div class="day-banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg> Nacht 22:00–03:00 — geblokkeerd</div>
       <p class="muted" style="margin:10px 2px 6px;font-size:.85rem;font-weight:600">Werkblok ${s.workStart}–${s.workEnd}</p>
@@ -334,10 +362,29 @@
     const a = await DB.get('appointments', Number(id));
     a.status = 'done'; a.updatedAt = new Date().toISOString();
     await DB.put('appointments', a);
+    let extra = '';
     const cu = await DB.get('customers', a.customerId);
-    if (cu) { cu.laatsteWasbeurt = a.datum; await DB.put('customers', cu); } // reset frequentie-cyclus
-    toast('Afgevinkt als voltooid ✓');
+    if (cu) {
+      cu.laatsteWasbeurt = a.datum; await DB.put('customers', cu); // reset frequentie-cyclus
+      const next = await scheduleNextFor(cu, a.datum);
+      if (next) extra = ` · volgende beurt ${fmtBE(parseISO(next.datum))} voorgesteld`;
+    }
+    toast('Afgevinkt als voltooid ✓' + extra, 'ok');
     closeModal(); render();
+  }
+  // Plant automatisch de volgende beurt (laatste datum + frequentie),
+  // tenzij er al een toekomstige, niet-voltooide afspraak voor deze klant bestaat.
+  async function scheduleNextFor(cu, fromISO) {
+    const existing = await DB.byIndex('appointments', 'customerId', cu.id);
+    const hasFuture = existing.some(a => a.status !== 'done' && a.datum > fromISO);
+    if (hasFuture) return null;
+    const nextISO = isoOf(addDays(parseISO(fromISO), freqDays(cu)));
+    const s = getSettings();
+    const id = await DB.add('appointments', {
+      customerId: cu.id, datum: nextISO, startTijd: s.workStart, duur: s.duration,
+      status: 'planned', auto: true, createdAt: new Date().toISOString(),
+    });
+    return { id, datum: nextISO };
   }
   async function reopenAppt(id) { const a = await DB.get('appointments', Number(id)); a.status = 'planned'; await DB.put('appointments', a); closeModal(); render(); }
   async function deleteAppt(id) { await DB.remove('appointments', Number(id)); toast('Afspraak verwijderd'); closeModal(); render(); }
@@ -389,6 +436,7 @@
 
   async function renderAutoplan() {
     const root = $('#view-autoplan');
+    await WEATHER.ensure();
     const wk = state.planWeekStart, wkEnd = addDays(wk, 6);
     const range = `${wk.getDate()} ${MONTHS_NL[wk.getMonth()]} – ${wkEnd.getDate()} ${MONTHS_NL[wkEnd.getMonth()]}`;
     let body = '';
@@ -404,7 +452,8 @@
       if (!filled.length) body += `<div class="empty">Geen klanten om te plannen deze week. 🎉</div>`;
       filled.forEach(d => {
         const dd = parseISO(d.dateISO);
-        body += `<div class="card"><div class="plan-day-title">${fmtDayDate(dd)} <span class="gem">· ${esc(d.gemeenteLabel)}</span></div>`;
+        const wx = WEATHER.badge(d.dateISO);
+        body += `<div class="card"><div class="plan-day-title">${fmtDayDate(dd)} <span class="gem">· ${esc(d.gemeenteLabel)}</span>${wx?`<span class="wx-tag" title="${wx.pop}% kans op neerslag">${wx.emoji} ${wx.pop}%</span>`:''}</div>`;
         d.stops.forEach(st => {
           body += `<div class="plan-item"><span class="t">${st.time}</span><div class="cust-info"><div class="cust-name">${esc(st.customer.naam)}</div><div class="cust-sub">${esc(st.customer.postcode||'')} ${esc(st.customer.gemeente||'')}</div></div></div>`;
         });
@@ -479,6 +528,26 @@
   function renderInstellingen() {
     const s = getSettings();
     const root = $('#view-instellingen');
+    const cfg = SYNC.getConfig() || {};
+    const meta = SYNC.getMeta();
+    const connected = SYNC.isConfigured();
+    const syncStatus = connected
+      ? `Verbonden${meta?.lastAt ? ` · laatste sync ${new Date(meta.lastAt).toLocaleString('nl-BE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}` : ''}`
+      : 'Niet verbonden — data staat enkel op dit toestel.';
+    const syncCard = `
+      <div class="card">
+        <h3 style="margin:0 0 6px">Synchronisatie tussen toestellen</h3>
+        <p class="muted" style="font-size:.85rem;margin-top:0">${esc(syncStatus)}</p>
+        <div class="field"><label>Upstash REST URL</label><input id="sync-url" type="url" placeholder="https://xxx.upstash.io" value="${esc(cfg.url||'')}"></div>
+        <div class="field"><label>Upstash REST token</label><input id="sync-token" type="password" placeholder="AX…" value="${esc(cfg.token||'')}"></div>
+        <div class="field"><label>Sync-code (zelfde op gsm én tablet)</label><input id="sync-code" value="${esc(cfg.code||'andry')}"></div>
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn btn-sm" data-action="sync-save" style="flex:1">Verbinden</button>
+          <button class="btn btn-soft btn-sm" data-action="sync-now" style="flex:1">Sync nu</button>
+        </div>
+        ${connected ? `<button class="btn btn-ghost btn-sm" data-action="sync-disconnect">Loskoppelen</button>` : ''}
+        <p class="muted" style="font-size:.78rem">Gratis bucket via console.upstash.com → maak een Redis-database → kopieer <b>UPSTASH_REDIS_REST_URL</b> en <b>…REST_TOKEN</b>. Vul op beide toestellen dezelfde gegevens + sync-code in.</p>
+      </div>`;
     root.innerHTML = `
       <div class="card">
         <h3 style="margin:0 0 12px">Werkblok</h3>
@@ -492,6 +561,7 @@
         <p class="muted" style="font-size:.82rem">Hoofdberoep 07:00–17:00 en nacht 22:00–03:00 blijven steeds geblokkeerd.</p>
         <button class="btn" data-action="save-settings">Opslaan</button>
       </div>
+      ${syncCard}
       <div class="card">
         <h3 style="margin:0 0 8px">Back-up</h3>
         <p class="muted" style="font-size:.85rem;margin-top:0">Data staat lokaal op dit toestel. Maak een back-up om over te zetten naar je gsm/tablet.</p>
@@ -523,11 +593,34 @@
     if (!file) return;
     const r = new FileReader();
     r.onload = async () => {
-      try { await DB.importAll(JSON.parse(r.result), { replace: true }); toast('Back-up geïmporteerd ✓', 'ok'); render(); }
+      try { await DB.importAll(JSON.parse(r.result), { replace: true }); SYNC.touch(); toast('Back-up geïmporteerd ✓', 'ok'); render(); }
       catch { toast('Ongeldig back-up bestand', 'err'); }
     };
     r.readAsText(file);
   }
+  async function syncSave() {
+    const url = ($('#sync-url').value || '').trim().replace(/\/+$/, '');
+    const token = ($('#sync-token').value || '').trim();
+    const code = ($('#sync-code').value || '').trim() || 'andry';
+    if (!url || !token) { toast('URL en token zijn verplicht', 'err'); return; }
+    SYNC.setConfig({ url, token, code });
+    toast('Verbinden…');
+    try {
+      const r = await SYNC.connect();
+      toast(r === 'pulled' ? 'Cloud-data opgehaald ✓' : 'Cloud aangemaakt ✓', 'ok');
+      render();
+    } catch { toast('Verbinden mislukt — controleer URL/token', 'err'); }
+  }
+  async function syncNow() {
+    if (!SYNC.isConfigured()) { toast('Verbind eerst met een bucket', 'err'); return; }
+    toast('Synchroniseren…');
+    try {
+      const r = await SYNC.sync();
+      toast(r === 'pulled' ? 'Bijgewerkt vanaf cloud ✓' : r === 'pushed' ? 'Cloud bijgewerkt ✓' : 'Alles up-to-date ✓', 'ok');
+      render();
+    } catch { toast('Sync mislukt — controleer verbinding', 'err'); }
+  }
+  function syncDisconnect() { SYNC.clearConfig(); toast('Losgekoppeld'); render(); }
   async function wipeAll() {
     openModal(`<h3>Alles wissen?</h3><p class="modal-sub">Alle klanten en afspraken worden definitief verwijderd.</p>
       <div class="modal-actions"><button class="btn btn-danger" data-action="wipe-confirm">Ja, wis alles</button><button class="btn btn-ghost" data-action="close-modal">Annuleren</button></div>`);
@@ -580,6 +673,9 @@
       'week-next': () => { state.planWeekStart = addDays(state.planWeekStart, 7); state.plan = null; renderAutoplan(); },
       'export-copy': () => exportCopy(),
       'save-settings': () => saveSettingsFromForm(),
+      'sync-save': () => syncSave(),
+      'sync-now': () => syncNow(),
+      'sync-disconnect': () => syncDisconnect(),
       'backup-export': () => backupExport(),
       'seed-demo': () => seedDemo(),
       'wipe': () => wipeAll(),
@@ -596,6 +692,9 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+    window.addEventListener('3bel:synced', () => render());
+    WEATHER.ensure().then(() => { if (state.view === 'kalender') render(); }).catch(() => {});
+    if (SYNC.isConfigured()) SYNC.sync().catch(() => {});
   }
   boot();
 })();

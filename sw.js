@@ -1,11 +1,13 @@
 /* 3BEL — Service Worker */
-const CACHE = '3bel-v1';
+const CACHE = '3bel-v2';
 const ASSETS = [
   '/',
   '/index.html',
   '/style.css',
   '/js/db.js',
   '/js/geo.js',
+  '/js/weather.js',
+  '/js/sync.js',
   '/js/app.js',
   '/manifest.json',
   '/icons/icon-192.png',

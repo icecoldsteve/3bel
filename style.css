@@ -311,3 +311,18 @@ a, button, [role="button"] { -webkit-tap-highlight-color: rgba(30,111,217,.15); 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ── Weer & route (v1.1) ── */
+.cal-cell .wx { position: absolute; top: 2px; left: 4px; font-size: .7rem; line-height: 1; }
+.wx-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px; margin-bottom: 8px;
+  font-size: .86rem; font-weight: 600;
+  background: var(--blue-soft); color: var(--blue-dark);
+}
+.wx-banner.is-rainy { background: var(--st-planned-bg); color: #B45309; }
+.wx-tag { margin-left: auto; font-size: .78rem; font-weight: 800; color: #B45309; }
+.route-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; margin-bottom: 12px; text-decoration: none;
+}
